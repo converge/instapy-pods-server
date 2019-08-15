@@ -6,6 +6,9 @@ const sh = require('shorthash');
 const cors = require('cors')({
   origin: true,
 });
+const axios = require('axios');
+
+const serviceAccount = require('./serviceAccountKey.json');
 
 // set available topics
 const topics = [
@@ -19,7 +22,10 @@ const topics = [
 // set modes
 const modes = ['light', 'normal', 'heavy'];
 // instantiate FireStore
-admin.initializeApp();
+// admin.initializeApp();
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 const db = admin.firestore();
 db.settings({ timestampsInSnapshots: true });
 
@@ -111,6 +117,52 @@ module.exports.publishMyLatestPost = functions.https.onRequest((req, res) => {
         res
           .status(200)
           .send(`hashed:' ${hashedpostid} actual: ${req.query.postid}`);
+      })
+      .catch((err) => {
+        console.log('Error publishMyLatestPost', err);
+        res.status(403).send(err);
+      });
+  });
+});
+
+module.exports.publishMyLatestPost2 = functions.https.onRequest((req, res) => {
+  let username = '';
+  axios
+    .get(`https://www.instagram.com/p/${req.query.postid}/`)
+    .then((response) => {
+      // console.log(response.data);
+      // look for username in the HTML page
+      username = response.data.match(/(?<=alternateName":"@).+?(?=")/);
+      console.log(`Username: ${username}`);
+    })
+    .catch((err) => {
+      console.log(`ERROR: ${err}`);
+    });
+
+  return cors(req, res, () => {
+    if (topics.indexOf(req.query.topic) === -1) {
+      res.status(403).send(
+        `Invalid topic. Allowed topics on this server are : 
+        ${topics.join(',')}`,
+      );
+    }
+    const hashedpostid = sh.unique(req.query.postid);
+    console.log('hashedpostid:', hashedpostid);
+    const doctRef = db.collection(req.query.topic).doc(hashedpostid);
+
+    let mode = 'normal';
+    if (req.query.mode && modes.indexOf(req.query.mode) >= 0) {
+      mode = req.query.mode;
+    }
+    doctRef
+      .set({
+        mode,
+        postid: req.query.postid,
+      })
+      .then(() => {
+        res
+          .status(200)
+          .send(`hashed: ${hashedpostid} actual: ${req.query.postid} username: ${username}`);
       })
       .catch((err) => {
         console.log('Error publishMyLatestPost', err);
