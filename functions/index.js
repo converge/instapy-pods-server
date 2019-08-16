@@ -7,6 +7,7 @@ const cors = require('cors')({
   origin: true,
 });
 const axios = require('axios');
+const luxon = require('luxon');
 
 const serviceAccount = require('./serviceAccountKey.json');
 
@@ -19,8 +20,8 @@ const topics = [
   'sports',
   'entertainment',
 ];
-// set modes
-const modes = ['light', 'normal', 'heavy'];
+// set modesAvailable
+const modesAvailable = ['light', 'normal', 'heavy'];
 // instantiate FireStore
 // admin.initializeApp();
 admin.initializeApp({
@@ -105,7 +106,7 @@ module.exports.publishMyLatestPost = functions.https.onRequest((req, res) => {
     const doctRef = db.collection(req.query.topic).doc(hashedpostid);
 
     let mode = 'normal';
-    if (req.query.mode && modes.indexOf(req.query.mode) >= 0) {
+    if (req.query.mode && modesAvailable.indexOf(req.query.mode) >= 0) {
       mode = req.query.mode;
     }
     doctRef
@@ -125,44 +126,103 @@ module.exports.publishMyLatestPost = functions.https.onRequest((req, res) => {
   });
 });
 
-module.exports.publishMyLatestPost2 = functions.https.onRequest((req, res) => {
-  let username = '';
-  axios
-    .get(`https://www.instagram.com/p/${req.query.postid}/`)
-    .then((response) => {
-      // console.log(response.data);
-      // look for username in the HTML page
-      username = response.data.match(/(?<=alternateName":"@).+?(?=")/);
-      console.log(`Username: ${username}`);
-    })
-    .catch((err) => {
-      console.log(`ERROR: ${err}`);
+
+const getInstagramUsername = async (postId) => {
+  const response = await axios.get(`https://www.instagram.com/p/${postId}/`);
+  try {
+    if (response.status === 200) return response.data.match(/(?<=alternateName":"@).+?(?=")/);
+  } catch (err) {
+    console.log(err);
+    return null;
+  }
+};
+
+
+const updateUsernameDailyLimit = async (username) => {
+  const collRef = await db.collection('users');
+  const userData = await collRef.orderBy('created', 'desc').limit(1).get();
+  let postAge = null;
+  let dailyLimit = null;
+  if (!userData.empty) {
+    userData.forEach((doc) => {
+      dailyLimit = doc.get('daily_limit');
+      let mostRecent = doc.get('created').toDate();
+      mostRecent = luxon.DateTime.fromJSDate(mostRecent);
+      const now = luxon.DateTime.fromJSDate(new Date());
+      postAge = now.diff(mostRecent, 'days').toObject().days;
     });
+  } else {
+    // force new publish post date record
+    postAge = 2;
+  }
+  // if first last published post is older than one day, create a new daily post record
+  if (postAge > 1) {
+    // create new daily record
+    collRef.add({
+      username,
+      daily_limit: 0,
+      created: new Date(),
+    });
+    return true;
+  }
+
+  // update
+  if (dailyLimit >= 5) {
+    return false;
+  }
+  // add 1 to daily limit
+  dailyLimit += 1;
+  userData.forEach((doc) => {
+    collRef.doc(doc.id).update({ daily_limit: dailyLimit });
+  });
+  return true;
+};
+
+/**
+ * Publish PodId to the Pod Server
+ * @validations:
+ * 1. collect username
+ * 2. check post daily limit per user
+ * 3. publish if allowed
+ */
+module.exports.publishMyLatestPost2 = functions.https.onRequest(async (req, res) => {
+  const { postid, topic, mode } = req.query;
+  const username = await getInstagramUsername(postid);
+  let allowToPublishNewPost = false;
+  // raise 403 status if it was unable to find the username
+  if (username === null) res.status(403).send('Unable to load username');
+  allowToPublishNewPost = await updateUsernameDailyLimit(username);
 
   return cors(req, res, () => {
-    if (topics.indexOf(req.query.topic) === -1) {
+    if (topics.indexOf(topic) === -1) {
       res.status(403).send(
         `Invalid topic. Allowed topics on this server are : 
         ${topics.join(',')}`,
       );
     }
-    const hashedpostid = sh.unique(req.query.postid);
-    console.log('hashedpostid:', hashedpostid);
-    const doctRef = db.collection(req.query.topic).doc(hashedpostid);
 
-    let mode = 'normal';
-    if (req.query.mode && modes.indexOf(req.query.mode) >= 0) {
-      mode = req.query.mode;
+    if (!allowToPublishNewPost) {
+      res.status(403).send(
+        `Daily Pod Publish limit reached in this server for username: ${username}`,
+      );
+    }
+    const hashedpostid = sh.unique(postid);
+    console.log('New Post added to the Pod with PostId: ', hashedpostid);
+    const doctRef = db.collection(topic).doc(hashedpostid);
+
+    let currentMode = 'normal';
+    if (mode && modesAvailable.indexOf(mode) >= 0) {
+      currentMode = req.query.mode;
     }
     doctRef
       .set({
-        mode,
-        postid: req.query.postid,
+        mode: currentMode,
+        postid,
       })
       .then(() => {
         res
           .status(200)
-          .send(`hashed: ${hashedpostid} actual: ${req.query.postid} username: ${username}`);
+          .send(`hashed: ${hashedpostid} actual: ${postid} username: ${username}`);
       })
       .catch((err) => {
         console.log('Error publishMyLatestPost', err);
