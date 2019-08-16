@@ -8,9 +8,9 @@ const cors = require('cors')({
 });
 const axios = require('axios');
 const luxon = require('luxon');
-
 const serviceAccount = require('./serviceAccountKey.json');
 
+const postPerDayRestriction = 5; // 5 posts per day
 // set available topics
 const topics = [
   'general',
@@ -22,8 +22,8 @@ const topics = [
 ];
 // set modesAvailable
 const modesAvailable = ['light', 'normal', 'heavy'];
+
 // instantiate FireStore
-// admin.initializeApp();
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -90,42 +90,6 @@ module.exports.getRecentPostsV1 = functions.https.onRequest((req, res) => {
   });
 });
 
-/*
- * Publish Post ID
- */
-module.exports.publishMyLatestPost = functions.https.onRequest((req, res) => {
-  return cors(req, res, () => {
-    if (topics.indexOf(req.query.topic) === -1) {
-      res.status(403).send(
-        `Invalid topic. Allowed topics on this server are : 
-        ${topics.join(',')}`,
-      );
-    }
-    const hashedpostid = sh.unique(req.query.postid);
-    console.log('hashedpostid:', hashedpostid);
-    const doctRef = db.collection(req.query.topic).doc(hashedpostid);
-
-    let mode = 'normal';
-    if (req.query.mode && modesAvailable.indexOf(req.query.mode) >= 0) {
-      mode = req.query.mode;
-    }
-    doctRef
-      .set({
-        mode,
-        postid: req.query.postid,
-      })
-      .then(() => {
-        res
-          .status(200)
-          .send(`hashed:' ${hashedpostid} actual: ${req.query.postid}`);
-      })
-      .catch((err) => {
-        console.log('Error publishMyLatestPost', err);
-        res.status(403).send(err);
-      });
-  });
-});
-
 
 const getInstagramUsername = async (postId) => {
   const response = await axios.get(`https://www.instagram.com/p/${postId}/`);
@@ -167,7 +131,7 @@ const updateUsernameDailyLimit = async (username) => {
   }
 
   // update
-  if (dailyLimit >= 5) {
+  if (dailyLimit >= postPerDayRestriction) {
     return false;
   }
   // add 1 to daily limit
@@ -179,13 +143,13 @@ const updateUsernameDailyLimit = async (username) => {
 };
 
 /**
- * Publish PodId to the Pod Server
+ * Publish PostId to the Pod Server
  * @validations:
  * 1. collect username
  * 2. check post daily limit per user
  * 3. publish if allowed
  */
-module.exports.publishMyLatestPost2 = functions.https.onRequest(async (req, res) => {
+module.exports.publishPost = functions.https.onRequest(async (req, res) => {
   const { postid, topic, mode } = req.query;
   const username = await getInstagramUsername(postid);
   let allowToPublishNewPost = false;

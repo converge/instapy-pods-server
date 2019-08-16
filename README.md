@@ -9,7 +9,7 @@ getRecentPosts
 
 instapost
 
-publishMyLatestPost
+publishPost
 ```
 
 
