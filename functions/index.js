@@ -97,8 +97,8 @@ const getInstagramUsername = async (postId) => {
     if (response.status === 200) return response.data.match(/(?<=alternateName":"@).+?(?=")/);
   } catch (err) {
     console.log(err);
-    return null;
   }
+  return null;
 };
 
 
